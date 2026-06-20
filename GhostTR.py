@@ -10,6 +10,7 @@ import json
 import requests
 import time
 import os
+import ipaddress
 import phonenumbers
 from phonenumbers import carrier, geocoder, timezone
 from sys import stderr
@@ -176,12 +177,48 @@ def showIP():
     print(f"\n {Wh}==============================================")
 
 
+def validate_ip_target(ip):
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError:
+        return False, "Invalid IP format"
+
+    try:
+        req_api = requests.get(f"https://ipwho.is/{ip}", timeout=10)
+        if req_api.status_code != 200:
+            return False, f"HTTP {req_api.status_code}"
+
+        data = req_api.json()
+        if not data.get("success", False):
+            return False, data.get("message", "Lookup failed")
+
+        return True, data
+    except requests.RequestException as e:
+        return False, str(e)
+
+
 @is_option
 def Live_Track():
     """
     Live location tracking of target IP address with real-time updates
     """
-    ip = input(f"{Wh}\n Enter IP target : {Gr}")
+    while True:
+        ip = input(f"{Wh}\n Enter IP target : {Gr}")
+        if not ip.strip():
+            print(f"\n{Wh}[ {Re}! {Wh}] {Re}IP cannot be empty")
+            continue
+
+        valid, result = validate_ip_target(ip)
+        if valid:
+            ip_data = result
+            break
+
+        print(f"\n{Wh}[ {Re}! {Wh}] {Re}Invalid IP or lookup failed: {result}")
+        retry = input(f"{Wh}Retry with another IP? [Y/n]: {Gr}")
+        if retry.lower().startswith('n'):
+            print(f"\n{Wh}[ {Ye}! {Wh}] {Ye}Live tracking canceled")
+            return
+
     refresh_interval = input(f"{Wh} Enter refresh interval in seconds (default 10s) : {Gr}")
     
     try:
@@ -202,18 +239,42 @@ def Live_Track():
         while True:
             iteration += 1
             try:
-                req_api = requests.get(f"http://ipwho.is/{ip}")
-                ip_data = json.loads(req_api.text)
-                
+                req_api = requests.get(f"https://ipwho.is/{ip}", timeout=10)
+                if req_api.status_code != 200:
+                    print(f" {Re}Error fetching data: HTTP {req_api.status_code}")
+                    time.sleep(refresh_interval)
+                    continue
+
+                ip_data = req_api.json()
+                if not ip_data.get("success", False):
+                    error_message = ip_data.get("message", "Lookup failed")
+                    print(f" {Re}Error fetching data: {error_message}")
+                    time.sleep(refresh_interval)
+                    continue
+
                 current_time = time.strftime('%Y-%m-%d %H:%M:%S')
                 latitude = ip_data.get("latitude")
                 longitude = ip_data.get("longitude")
-                city = ip_data.get("city")
-                country = ip_data.get("country")
-                region = ip_data.get("region")
+                city = ip_data.get("city", "N/A")
+                country = ip_data.get("country", "N/A")
+                region = ip_data.get("region", "N/A")
                 isp = ip_data.get("connection", {}).get("isp", "N/A")
-                
-                # Print current location
+                current_time_zone = ip_data.get('timezone', {}).get('current_time', 'N/A')
+
+                if latitude is None or longitude is None:
+                    print(f"\n{Gr}[UPDATE #{iteration}] {current_time}")
+                    print(f" {Wh}Error          :{Re} Location data is unavailable for this IP")
+                    print(f" {Wh}Country        :{Gr} {country}")
+                    print(f" {Wh}Region         :{Gr} {region}")
+                    print(f" {Wh}City           :{Gr} {city}")
+                    print(f" {Wh}ISP            :{Gr} {isp}")
+                    print(f" {Wh}Current Time   :{Gr} {current_time_zone}")
+                    print(f" {Wh}-----------------------------------------------------")
+                    time.sleep(refresh_interval)
+                    continue
+
+                maps_url = f"https://www.google.com/maps/@{latitude},{longitude},8z"
+
                 print(f"\n{Gr}[UPDATE #{iteration}] {current_time}")
                 print(f" {Wh}Country        :{Gr} {country}")
                 print(f" {Wh}Region         :{Gr} {region}")
@@ -221,10 +282,9 @@ def Live_Track():
                 print(f" {Wh}Latitude       :{Gr} {latitude}")
                 print(f" {Wh}Longitude      :{Gr} {longitude}")
                 print(f" {Wh}ISP            :{Gr} {isp}")
-                print(f" {Wh}Google Maps    :{Gr} https://www.google.com/maps/@{latitude},{longitude},8z")
-                print(f" {Wh}Current Time   :{Gr} {ip_data.get('timezone', {}).get('current_time', 'N/A')}")
-                
-                # Store tracking data
+                print(f" {Wh}Google Maps    :{Gr} {maps_url}")
+                print(f" {Wh}Current Time   :{Gr} {current_time_zone}")
+
                 tracking_data.append({
                     "time": current_time,
                     "latitude": latitude,
@@ -232,24 +292,24 @@ def Live_Track():
                     "city": city,
                     "country": country
                 })
-                
-                # Detect movement if we have previous data
+
                 if len(tracking_data) > 1:
                     prev_data = tracking_data[-2]
                     if (prev_data["latitude"] != latitude or prev_data["longitude"] != longitude):
                         print(f" {Re}⚠ LOCATION CHANGED ⚠")
                         print(f"  {Wh}Previous: {prev_data['city']}, {prev_data['country']}")
                         print(f"  {Wh}Current:  {city}, {country}")
-                
+
                 print(f" {Wh}-----------------------------------------------------")
-                
-                # Wait before next update
                 time.sleep(refresh_interval)
-                
-            except Exception as e:
+
+            except requests.RequestException as e:
                 print(f" {Re}Error fetching data: {e}")
                 time.sleep(refresh_interval)
-                
+            except Exception as e:
+                print(f" {Re}Unexpected error: {e}")
+                time.sleep(refresh_interval)
+
     except KeyboardInterrupt:
         print(f"\n\n {Wh}========== {Gr}TRACKING SUMMARY {Wh}=============")
         print(f" {Wh}Total Updates      :{Gr} {len(tracking_data)}")
